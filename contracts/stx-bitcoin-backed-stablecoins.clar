@@ -164,3 +164,50 @@
 
 
 
+;; Admin: Pause system
+(define-public (pause-system)
+    (begin
+        (asserts! (is-eq tx-sender admin) (err "Unauthorized"))
+        (var-set system-paused true)
+        (ok true)
+    ))
+
+;; Admin: Unpause system
+(define-public (unpause-system)
+    (begin
+        (asserts! (is-eq tx-sender admin) (err "Unauthorized"))
+        (var-set system-paused false)
+        (ok true)
+    ))
+
+;; Withdraw excess collateral
+(define-public (withdraw-collateral (btc-amount uint))
+    (begin
+        (asserts! (not (is-paused)) (err "System is paused"))
+        (asserts! (> btc-amount u0) (err "BTC amount must be greater than zero"))
+        (let ((collateral (get-collateral tx-sender))
+              (balance (get-stablecoin-balance tx-sender))
+              (btc-price (get-btc-price))
+              (min-collateral (* balance (/ (var-get min-collateral-ratio) u100))))
+            (asserts! (> collateral min-collateral) (err "Not enough excess collateral"))
+            (let ((withdrawable (- collateral min-collateral)))
+                (asserts! (>= withdrawable btc-amount) (err "Requested amount exceeds excess collateral"))
+                (map-set collateral-map
+                         {user: tx-sender}
+                         {btc: (- collateral btc-amount)})
+                (ok btc-amount)
+            )
+        )
+    ))
+
+;; Claim earned interest
+(define-public (claim-interest)
+    (begin
+        (asserts! (not (is-paused)) (err "System is paused"))
+        (let ((earned (default-to u0 (get earned (map-get? interest-earned {user: tx-sender})))))
+            (asserts! (> earned u0) (err "No interest to claim"))
+            (map-set interest-earned {user: tx-sender} {earned: u0})
+            (ok earned)
+        )
+    ))
+
