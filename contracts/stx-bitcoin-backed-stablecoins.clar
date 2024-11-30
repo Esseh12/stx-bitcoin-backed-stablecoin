@@ -85,3 +85,82 @@
                  {balance: (+ amount (default-to u0 (get balance (map-get? stablecoin-balance {user: tx-sender}))))})
         (ok amount)
     ))
+
+
+
+;; Burn stablecoins and unlock corresponding BTC collateral
+(define-public (burn-stablecoin (amount uint))
+    (begin
+        (asserts! (> amount u0) (err "Burn amount must be greater than zero"))
+        (let ((balance (get-stablecoin-balance tx-sender)))
+            (asserts! (>= balance amount) (err "Not enough stablecoins"))
+            ;; Decrease stablecoin balance
+            (map-set stablecoin-balance {user: tx-sender} {balance: (- balance amount)})
+            ;; Unlock collateral equivalent to burned stablecoins
+            (let ((btc-price  (get-btc-price)))
+                (let ((collateral-to-unlock (/ amount btc-price)))
+                    (map-set collateral-map
+                             {user: tx-sender}
+                             {btc: (- (get-collateral tx-sender) collateral-to-unlock)})
+                    (ok collateral-to-unlock)
+                )
+            )
+        )
+    ))
+
+;; Liquidate under-collateralized positions
+(define-public (liquidate (user principal))
+    (begin
+        (let ((collateral (get-collateral user))
+              (balance (get-stablecoin-balance user))
+              (btc-price (get-btc-price))
+              (min-ratio (var-get min-collateral-ratio))) ;; Fetch min-collateral-ratio
+            ;; Check if under-collateralized
+            (asserts! (< (* collateral btc-price) (* balance (/ min-ratio u100))) (err "Position is not under-collateralized"))
+            ;; Liquidate the user's position
+            (map-delete collateral-map {user: user})
+            (map-delete stablecoin-balance {user: user})
+            (ok true)
+        )
+    ))
+
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;                          CONSTANTS                           ;;
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+(define-constant admin tx-sender) ;; Replace with admin principal
+(define-data-var system-paused bool false) ;; Pause system operations
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;                          DATA STORAGE                        ;;
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+
+(define-map interest-earned
+    {user: principal}
+    {earned: uint})
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;                          READ-ONLY FUNCTIONS                 ;;
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+;; Check if the system is paused
+(define-read-only (is-paused)
+    (var-get system-paused))
+
+;; Get dynamic minimum collateral ratio
+(define-read-only (get-min-collateral-ratio)
+    (var-get min-collateral-ratio))
+
+
+(define-public (adjust-collateral-ratio (new-ratio uint))
+    (begin
+        (asserts! (is-eq tx-sender admin) (err "Unauthorized"))
+        (asserts! (> new-ratio u100) (err "Collateral ratio must be greater than 100%"))
+        (var-set min-collateral-ratio new-ratio)
+        (ok new-ratio)
+    ))
+
+
+
